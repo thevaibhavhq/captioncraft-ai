@@ -1,7 +1,6 @@
 import streamlit as st
 import anthropic
-import openai
-import json
+from supabase import create_client, Client
 
 # ── Page config ──────────────────────────────────────────────────────────────
 st.set_page_config(
@@ -14,25 +13,19 @@ st.set_page_config(
 # ── Global CSS ────────────────────────────────────────────────────────────────
 st.markdown("""
 <style>
-  /* Import fonts */
   @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Syne:wght@700;800&display=swap');
 
-  /* Reset & base */
   html, body, [class*="css"] {
     font-family: 'Inter', sans-serif;
     background-color: #0D0D0D;
     color: #F0EDE8;
   }
 
-  /* Hide Streamlit chrome */
   #MainMenu, footer, header { visibility: hidden; }
   .block-container { padding: 1.5rem 1rem 4rem 1rem; max-width: 680px; margin: auto; }
 
   /* ── Hero ── */
-  .hero {
-    text-align: center;
-    padding: 2.5rem 0 1.8rem 0;
-  }
+  .hero { text-align: center; padding: 2.5rem 0 1.8rem 0; }
   .hero-badge {
     display: inline-block;
     background: linear-gradient(135deg, #7B5EA7, #C084FC);
@@ -57,12 +50,7 @@ st.markdown("""
     -webkit-text-fill-color: transparent;
     background-clip: text;
   }
-  .hero-sub {
-    font-size: 0.95rem;
-    color: #888;
-    margin: 0;
-    line-height: 1.5;
-  }
+  .hero-sub { font-size: 0.95rem; color: #888; margin: 0; line-height: 1.5; }
 
   /* ── Cards ── */
   .card {
@@ -81,7 +69,7 @@ st.markdown("""
     margin-bottom: 0.8rem;
   }
 
-  /* ── Streamlit input overrides ── */
+  /* ── Input overrides ── */
   .stTextInput > div > div > input,
   .stTextArea > div > div > textarea,
   .stSelectbox > div > div {
@@ -102,23 +90,7 @@ st.markdown("""
     font-weight: 500 !important;
   }
 
-  /* ── Pills for platform / tone ── */
-  div[data-testid="stHorizontalBlock"] .stButton > button {
-    border-radius: 20px;
-    border: 1px solid #2E2E2E;
-    background: #1A1A1A;
-    color: #AAA;
-    font-size: 0.8rem;
-    padding: 0.25rem 0.85rem;
-    transition: all 0.15s ease;
-  }
-  div[data-testid="stHorizontalBlock"] .stButton > button:hover {
-    border-color: #7B5EA7;
-    color: #C084FC;
-    background: #1E1628;
-  }
-
-  /* ── Generate button ── */
+  /* ── Buttons ── */
   .stButton > button[kind="primary"] {
     width: 100%;
     background: linear-gradient(135deg, #7B5EA7, #C084FC) !important;
@@ -132,6 +104,20 @@ st.markdown("""
     transition: opacity 0.2s ease;
   }
   .stButton > button[kind="primary"]:hover { opacity: 0.88; }
+  .stButton > button[kind="primary"]:disabled {
+    background: #2A2A2A !important;
+    color: #666 !important;
+    opacity: 1 !important;
+  }
+
+  .stButton > button[kind="secondary"] {
+    width: 100%;
+    background: #1A1A1A !important;
+    color: #999 !important;
+    border: 1px solid #2E2E2E !important;
+    border-radius: 10px !important;
+    font-size: 0.85rem !important;
+  }
 
   /* ── Output caption box ── */
   .caption-box {
@@ -154,12 +140,50 @@ st.markdown("""
     margin-bottom: 0.4rem;
   }
 
-  /* ── Divider ── */
-  hr { border-color: #2A2A2A; margin: 1.4rem 0; }
+  /* ── Usage badge ── */
+  .usage-badge {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    background: #161616;
+    border: 1px solid #2A2A2A;
+    border-radius: 12px;
+    padding: 0.7rem 1rem;
+    margin-bottom: 1rem;
+    font-size: 0.82rem;
+    color: #AAA;
+  }
+  .usage-badge strong { color: #C084FC; }
 
-  /* ── Misc ── */
+  /* ── Recharge card ── */
+  .recharge-card {
+    background: linear-gradient(135deg, #2A1F3D, #1A1326);
+    border: 1px solid #7B5EA7;
+    border-radius: 16px;
+    padding: 1.6rem 1.4rem;
+    text-align: center;
+    margin: 1rem 0;
+  }
+  .recharge-card h3 {
+    font-family: 'Syne', sans-serif;
+    font-size: 1.3rem;
+    color: #fff;
+    margin: 0.4rem 0 0.5rem 0;
+  }
+  .recharge-card p {
+    color: #BBB;
+    font-size: 0.9rem;
+    margin: 0 0 1rem 0;
+    line-height: 1.5;
+  }
+  .recharge-icon { font-size: 2.2rem; }
+
+  hr { border-color: #2A2A2A; margin: 1.4rem 0; }
   .tip-text { font-size: 0.78rem; color: #666; margin-top: 0.3rem; }
   .stAlert { border-radius: 10px !important; }
+
+  /* ── Auth toggle ── */
+  .auth-toggle-text { text-align: center; color: #888; font-size: 0.88rem; margin-top: 0.8rem; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -167,6 +191,9 @@ st.markdown("""
 PLATFORMS = ["Instagram", "LinkedIn", "Twitter/X", "YouTube", "Facebook", "TikTok"]
 TONES = ["Professional", "Casual & Fun", "Inspirational", "Witty & Humorous", "Educational", "Storytelling"]
 CAPTION_COUNTS = [1, 2, 3]
+
+# 🔧 Update this with your real Razorpay payment link
+RECHARGE_LINK = "https://razorpay.me/@yourbusiness"
 
 PLATFORM_HINTS = {
     "Instagram":  "visual storytelling, hashtags, emojis, 150–220 chars ideal",
@@ -177,57 +204,206 @@ PLATFORM_HINTS = {
     "TikTok":     "trendy, short hook, relevant hashtags, high energy",
 }
 
+# ── Supabase client ───────────────────────────────────────────────────────────
+@st.cache_resource
+def init_supabase() -> Client:
+    return create_client(st.secrets["SUPABASE_URL"], st.secrets["SUPABASE_ANON_KEY"])
+
+supabase = init_supabase()
+
+# ── Auth helpers ──────────────────────────────────────────────────────────────
+def sign_up(email, password):
+    return supabase.auth.sign_up({"email": email, "password": password})
+
+def sign_in(email, password):
+    return supabase.auth.sign_in_with_password({"email": email, "password": password})
+
+def get_profile(user_id):
+    result = supabase.table("profiles").select("*").eq("id", user_id).execute()
+    return result.data[0] if result.data else None
+
+def deduct_credit(user_id, current_credits):
+    new_credits = current_credits - 1
+    supabase.table("profiles").update({"credits": new_credits}).eq("id", user_id).execute()
+    return new_credits
+
+# ── Session state init ────────────────────────────────────────────────────────
+if "authenticated" not in st.session_state:
+    st.session_state.authenticated = False
+if "user_id" not in st.session_state:
+    st.session_state.user_id = None
+if "user_email" not in st.session_state:
+    st.session_state.user_email = None
+if "auth_mode" not in st.session_state:
+    st.session_state.auth_mode = "login"  # "login" or "signup"
+
+# ── AUTH PAGE ──────────────────────────────────────────────────────────────────
+if not st.session_state.authenticated:
+    st.markdown("""
+    <div class="hero">
+      <div class="hero-badge">✦ AI-Powered</div>
+      <h1 class="hero-title">CaptionCraft AI</h1>
+      <p class="hero-sub">Turn any idea into scroll-stopping social captions<br>in seconds. Powered by Claude.</p>
+    </div>
+    """, unsafe_allow_html=True)
+
+    is_login = st.session_state.auth_mode == "login"
+    title = "Sign In" if is_login else "Create Account"
+
+    st.markdown(f'<div class="card"><div class="card-title">{title}</div>', unsafe_allow_html=True)
+
+    email_input = st.text_input("Email", placeholder="you@email.com", key="auth_email")
+    password_input = st.text_input("Password", type="password", placeholder="••••••••", key="auth_password")
+
+    if is_login:
+        action_clicked = st.button("✦ Sign In", type="primary", use_container_width=True)
+    else:
+        action_clicked = st.button("✦ Create Account", type="primary", use_container_width=True)
+
+    st.markdown('</div>', unsafe_allow_html=True)
+
+    # Toggle between login/signup
+    if is_login:
+        st.markdown('<p class="auth-toggle-text">New here?</p>', unsafe_allow_html=True)
+        if st.button("Create an account", type="secondary", use_container_width=True):
+            st.session_state.auth_mode = "signup"
+            st.rerun()
+    else:
+        st.markdown('<p class="auth-toggle-text">Already have an account?</p>', unsafe_allow_html=True)
+        if st.button("Sign in instead", type="secondary", use_container_width=True):
+            st.session_state.auth_mode = "login"
+            st.rerun()
+
+    # ── Handle action ──
+    if action_clicked:
+        if not email_input.strip() or not password_input.strip():
+            st.error("⚠️ Please enter both email and password.")
+        elif len(password_input) < 6:
+            st.error("⚠️ Password must be at least 6 characters.")
+        else:
+            try:
+                if is_login:
+                    res = sign_in(email_input.strip().lower(), password_input)
+                    user = res.user
+                    if user:
+                        st.session_state.authenticated = True
+                        st.session_state.user_id = user.id
+                        st.session_state.user_email = user.email
+                        st.rerun()
+                    else:
+                        st.error("⚠️ Invalid email or password.")
+                else:
+                    res = sign_up(email_input.strip().lower(), password_input)
+                    if res.user:
+                        st.success("✅ Account created! You can now sign in with your credentials. (Check your email if confirmation is enabled.)")
+                        st.session_state.auth_mode = "login"
+                    else:
+                        st.error("⚠️ Could not create account. Try a different email.")
+            except Exception as e:
+                err_msg = str(e)
+                if "already registered" in err_msg.lower() or "already exists" in err_msg.lower():
+                    st.error("⚠️ This email is already registered. Try signing in instead.")
+                elif "invalid login credentials" in err_msg.lower():
+                    st.error("⚠️ Invalid email or password.")
+                else:
+                    st.error(f"⚠️ Authentication error: {err_msg}")
+
+    st.stop()
+
+# ── MAIN APP (authenticated users only) ───────────────────────────────────────
+user_id = st.session_state.user_id
+user_email = st.session_state.user_email
+
+profile = get_profile(user_id)
+
+if profile is None:
+    st.error("⚠️ Could not load your profile. Please sign out and sign in again.")
+    if st.button("Sign out", type="secondary", use_container_width=True):
+        st.session_state.authenticated = False
+        st.session_state.user_id = None
+        st.session_state.user_email = None
+        supabase.auth.sign_out()
+        st.rerun()
+    st.stop()
+
+credits = profile.get("credits", 0)
+
 # ── Hero ──────────────────────────────────────────────────────────────────────
 st.markdown("""
 <div class="hero">
   <div class="hero-badge">✦ AI-Powered</div>
   <h1 class="hero-title">CaptionCraft AI</h1>
-  <p class="hero-sub">Turn any idea into scroll-stopping social captions<br>in seconds. Powered by Claude & GPT-4.</p>
+  <p class="hero-sub">Turn any idea into scroll-stopping social captions<br>in seconds. Powered by Claude.</p>
 </div>
 """, unsafe_allow_html=True)
 
-# ── Step 1: API Key ───────────────────────────────────────────────────────────
-st.markdown('<div class="card"><div class="card-title">① API Key</div>', unsafe_allow_html=True)
+# ── Usage badge + logout ───────────────────────────────────────────────────────
+st.markdown(f"""
+<div class="usage-badge">
+  <span>Signed in as <strong>{user_email}</strong></span>
+  <span><strong>{credits}</strong> credits remaining</span>
+</div>
+""", unsafe_allow_html=True)
 
-provider = st.selectbox("AI Provider", ["Anthropic (Claude)", "OpenAI (GPT-4o)"], label_visibility="collapsed")
-api_key = st.text_input(
-    "API Key",
-    type="password",
-    placeholder="sk-ant-...  or  sk-...",
-    label_visibility="collapsed",
-)
-st.markdown('<p class="tip-text">🔒 Your key is never stored. It lives only in this session.</p>', unsafe_allow_html=True)
-st.markdown('</div>', unsafe_allow_html=True)
+if st.button("Sign out", type="secondary", use_container_width=True):
+    st.session_state.authenticated = False
+    st.session_state.user_id = None
+    st.session_state.user_email = None
+    supabase.auth.sign_out()
+    st.rerun()
 
-# ── Step 2: Content Input ─────────────────────────────────────────────────────
-st.markdown('<div class="card"><div class="card-title">② Your Content</div>', unsafe_allow_html=True)
+st.markdown("<br>", unsafe_allow_html=True)
+
+# ── RECHARGE CARD (shown when out of credits) ──────────────────────────────────
+if credits <= 0:
+    st.markdown(f"""
+    <div class="recharge-card">
+      <div class="recharge-icon">⚡</div>
+      <h3>You're out of credits</h3>
+      <p>You've used all your generation credits. Recharge now to keep creating
+      scroll-stopping captions for your content.</p>
+    </div>
+    """, unsafe_allow_html=True)
+
+    st.link_button("✦ Recharge Credits", RECHARGE_LINK, type="primary", use_container_width=True)
+    st.markdown('<p class="tip-text" style="text-align:center;">After payment, your credits will be updated automatically within a few minutes.</p>', unsafe_allow_html=True)
+    st.markdown("<br>", unsafe_allow_html=True)
+
+# ── Content Input ──────────────────────────────────────────────────────────────
+st.markdown('<div class="card"><div class="card-title">Your Content</div>', unsafe_allow_html=True)
 
 topic = st.text_area(
     "What's this post about?",
     placeholder="e.g. Launched my SaaS product after 3 months of solo building. It helps freelancers automate client invoicing.",
     height=110,
+    disabled=(credits <= 0),
 )
 
 col1, col2 = st.columns(2)
 with col1:
-    platform = st.selectbox("Platform", PLATFORMS)
+    platform = st.selectbox("Platform", PLATFORMS, disabled=(credits <= 0))
 with col2:
-    tone = st.selectbox("Tone", TONES)
+    tone = st.selectbox("Tone", TONES, disabled=(credits <= 0))
 
-keywords = st.text_input("Keywords / hashtags to include (optional)", placeholder="e.g. SaaS, entrepreneurship, buildinpublic")
-num_captions = st.selectbox("How many captions?", CAPTION_COUNTS, index=1)
+keywords = st.text_input("Keywords / hashtags to include (optional)", placeholder="e.g. SaaS, entrepreneurship, buildinpublic", disabled=(credits <= 0))
+num_captions = st.selectbox("How many captions?", CAPTION_COUNTS, index=1, disabled=(credits <= 0))
 
 st.markdown('</div>', unsafe_allow_html=True)
 
-# ── Step 3: Advanced options (collapsed) ──────────────────────────────────────
+# ── Advanced options ──────────────────────────────────────────────────────────
 with st.expander("⚙️ Advanced options"):
-    include_cta = st.toggle("Add a Call-To-Action (CTA)", value=True)
-    include_hashtags = st.toggle("Include hashtag block", value=True)
-    include_emoji = st.toggle("Use emojis", value=True)
-    custom_instruction = st.text_input("Extra instruction (optional)", placeholder="e.g. Mention our launch discount ends Sunday")
+    include_cta = st.toggle("Add a Call-To-Action (CTA)", value=True, disabled=(credits <= 0))
+    include_hashtags = st.toggle("Include hashtag block", value=True, disabled=(credits <= 0))
+    include_emoji = st.toggle("Use emojis", value=True, disabled=(credits <= 0))
+    custom_instruction = st.text_input("Extra instruction (optional)", placeholder="e.g. Mention our launch discount ends Sunday", disabled=(credits <= 0))
 
 # ── Generate ──────────────────────────────────────────────────────────────────
-generate_clicked = st.button("✦ Generate Captions", type="primary", use_container_width=True)
+generate_clicked = st.button(
+    "✦ Generate Captions",
+    type="primary",
+    use_container_width=True,
+    disabled=(credits <= 0),
+)
 
 # ── Prompt builder ────────────────────────────────────────────────────────────
 def build_prompt(topic, platform, tone, keywords, num_captions,
@@ -262,25 +438,16 @@ Return exactly {num_captions} caption(s), each clearly separated by:
 Make each caption feel original and native to {platform}. Do not add any explanation outside the captions."""
     return prompt
 
-# ── API call helpers ──────────────────────────────────────────────────────────
-def call_claude(api_key, prompt):
+# ── API call helper ───────────────────────────────────────────────────────────
+def call_claude(prompt):
+    api_key = st.secrets["ANTHROPIC_API_KEY"]
     client = anthropic.Anthropic(api_key=api_key)
     message = client.messages.create(
-        model="claude-sonnet-4-6",
+        model="claude-3-5-sonnet-20241022",
         max_tokens=1500,
         messages=[{"role": "user", "content": prompt}]
     )
     return message.content[0].text
-
-def call_openai(api_key, prompt):
-    client = openai.OpenAI(api_key=api_key)
-    response = client.chat.completions.create(
-        model="gpt-4o",
-        messages=[{"role": "user", "content": prompt}],
-        max_tokens=1500,
-        temperature=0.85,
-    )
-    return response.choices[0].message.content
 
 def parse_captions(raw_text, num_captions):
     """Split raw output into individual captions."""
@@ -289,22 +456,20 @@ def parse_captions(raw_text, num_captions):
         parts = raw_text.split("---CAPTION")
         for part in parts[1:]:
             lines = part.strip().splitlines()
-            # Remove the header line like "1---" or "[1]---"
             body_lines = [l for l in lines if not l.strip().startswith(("1", "2", "3")) or len(l.strip()) > 3]
             body = "\n".join(body_lines).strip().lstrip("---").strip()
             if body:
                 captions.append(body)
     else:
-        # Fallback: return as single caption
         captions = [raw_text.strip()]
     return captions[:num_captions] if captions else [raw_text.strip()]
 
 # ── Main logic ────────────────────────────────────────────────────────────────
-if generate_clicked:
-    if not api_key.strip():
-        st.error("⚠️ Please enter your API key above.")
-    elif not topic.strip():
+if generate_clicked and credits > 0:
+    if not topic.strip():
         st.error("⚠️ Tell us what your post is about.")
+    elif "ANTHROPIC_API_KEY" not in st.secrets:
+        st.error("⚠️ Service temporarily unavailable. (Admin: ANTHROPIC_API_KEY missing from Streamlit Secrets.)")
     else:
         prompt = build_prompt(
             topic, platform, tone, keywords, num_captions,
@@ -313,12 +478,11 @@ if generate_clicked:
 
         with st.spinner("Crafting your captions…"):
             try:
-                if "Anthropic" in provider:
-                    raw = call_claude(api_key, prompt)
-                else:
-                    raw = call_openai(api_key, prompt)
-
+                raw = call_claude(prompt)
                 captions = parse_captions(raw, num_captions)
+
+                # Only deduct credit on a successful generation
+                new_credits = deduct_credit(user_id, credits)
 
                 st.markdown("---")
                 st.markdown(f"**✦ {len(captions)} caption(s) for {platform} · {tone} tone**")
@@ -330,19 +494,23 @@ if generate_clicked:
                     if i < len(captions):
                         st.markdown("<br>", unsafe_allow_html=True)
 
-                st.success("Tap the copy icon on any code block to copy a caption instantly.")
+                st.success(f"Tap the copy icon on any code block to copy a caption. ({new_credits} credits remaining)")
+
+                if new_credits <= 0:
+                    st.info("⚡ That was your last credit. Refresh the page to see the recharge option.")
 
             except anthropic.AuthenticationError:
-                st.error("Invalid Anthropic API key. Check and try again.")
-            except openai.AuthenticationError:
-                st.error("Invalid OpenAI API key. Check and try again.")
-            except Exception as e:
-                st.error(f"Something went wrong: {str(e)}")
+                st.error("⚠️ Service temporarily unavailable. (Admin: API key invalid — check Streamlit Secrets.)")
+            except anthropic.APIError:
+                st.error("⚠️ Our AI provider is having issues right now. Please try again shortly.")
+            except Exception:
+                st.error("⚠️ Something went wrong. Please try again. (Your credit was not deducted.)")
 
 # ── Footer ────────────────────────────────────────────────────────────────────
 st.markdown("""
 <hr>
 <p style='text-align:center; color:#444; font-size:0.78rem;'>
-  CaptionCraft AI · Built with Streamlit · Your key is never stored
+  CaptionCraft AI · Built with Streamlit
 </p>
 """, unsafe_allow_html=True)
+                    
